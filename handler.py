@@ -1,11 +1,13 @@
 """
 RunPod Serverless Handler for LTX-2 Video Generation
 Supports text-to-video and image-to-video generation with audio.
+Models are automatically downloaded from HuggingFace on first run.
 """
 
 import base64
 import io
 import os
+import subprocess
 import tempfile
 import traceback
 from pathlib import Path
@@ -13,25 +15,80 @@ from pathlib import Path
 import runpod
 import torch
 
+# Model paths
+MODELS_DIR = Path("/models")
+MODEL_PATH = MODELS_DIR / "ltx-2-19b-distilled-fp8.safetensors"
+SPATIAL_UPSAMPLER_PATH = MODELS_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors"
+GEMMA_PATH = MODELS_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"
+
+# HuggingFace model info
+HF_LTX_REPO = "Lightricks/LTX-2"
+HF_GEMMA_REPO = "google/gemma-3-12b-it-qat-q4_0-unquantized"
+
 # Lazy load the pipeline components
 _pipeline = None
+
+
+def download_models():
+    """Download models from HuggingFace if not already present."""
+    from huggingface_hub import hf_hub_download, snapshot_download
+
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Download LTX-2 main model
+    if not MODEL_PATH.exists():
+        print(f"Downloading LTX-2 model to {MODEL_PATH}...")
+        hf_hub_download(
+            repo_id=HF_LTX_REPO,
+            filename="ltx-2-19b-distilled-fp8.safetensors",
+            local_dir=str(MODELS_DIR),
+            local_dir_use_symlinks=False,
+        )
+        print("✓ LTX-2 model downloaded")
+    else:
+        print(f"✓ LTX-2 model already exists at {MODEL_PATH}")
+
+    # Download Spatial Upsampler
+    if not SPATIAL_UPSAMPLER_PATH.exists():
+        print(f"Downloading Spatial Upsampler to {SPATIAL_UPSAMPLER_PATH}...")
+        hf_hub_download(
+            repo_id=HF_LTX_REPO,
+            filename="ltx-2-spatial-upscaler-x2-1.0.safetensors",
+            local_dir=str(MODELS_DIR),
+            local_dir_use_symlinks=False,
+        )
+        print("✓ Spatial Upsampler downloaded")
+    else:
+        print(f"✓ Spatial Upsampler already exists at {SPATIAL_UPSAMPLER_PATH}")
+
+    # Download Gemma text encoder
+    if not GEMMA_PATH.exists():
+        print(f"Downloading Gemma text encoder to {GEMMA_PATH}...")
+        snapshot_download(
+            repo_id=HF_GEMMA_REPO,
+            local_dir=str(GEMMA_PATH),
+            local_dir_use_symlinks=False,
+        )
+        print("✓ Gemma text encoder downloaded")
+    else:
+        print(f"✓ Gemma text encoder already exists at {GEMMA_PATH}")
+
+    print("All models ready!")
 
 
 def get_pipeline():
     """Lazy load the pipeline to avoid loading on cold start until needed."""
     global _pipeline
     if _pipeline is None:
+        # Download models if needed
+        download_models()
+
         from ltx_pipelines import DistilledPipeline
 
-        checkpoint_path = os.environ.get(
-            "MODEL_PATH", "/models/ltx-2-19b-distilled-fp8.safetensors"
-        )
-        spatial_upsampler_path = os.environ.get(
-            "SPATIAL_UPSAMPLER_PATH", "/models/ltx-2-spatial-upscaler-x2-1.0.safetensors"
-        )
-        gemma_path = os.environ.get(
-            "GEMMA_PATH", "/models/gemma-3-12b-it-qat-q4_0-unquantized"
-        )
+        # Allow environment variable overrides
+        checkpoint_path = os.environ.get("MODEL_PATH", str(MODEL_PATH))
+        spatial_upsampler_path = os.environ.get("SPATIAL_UPSAMPLER_PATH", str(SPATIAL_UPSAMPLER_PATH))
+        gemma_path = os.environ.get("GEMMA_PATH", str(GEMMA_PATH))
         enable_fp8 = os.environ.get("ENABLE_FP8", "true").lower() == "true"
 
         print(f"Loading LTX-2 pipeline...")
@@ -154,7 +211,7 @@ def handler(job: dict) -> dict:
                     save_image_from_base64(image_content, str(image_path))
                     images.append((str(image_path), frame_index, strength))
 
-            # Get the pipeline (lazy loaded)
+            # Get the pipeline (lazy loaded, downloads models if needed)
             pipeline = get_pipeline()
 
             # Configure tiling for memory efficiency
@@ -248,4 +305,3 @@ if __name__ == "__main__":
             with open("test_output.mp4", "wb") as f:
                 f.write(base64.b64decode(result["video"]))
             print("Saved to test_output.mp4")
-
