@@ -3,7 +3,8 @@ RunPod Serverless Handler for LTX-2 Video Generation
 Supports text-to-video and image-to-video generation with synchronized audio.
 Models are automatically downloaded from HuggingFace on first run.
 
-Audio is automatically generated and embedded in the video output.
+🎵 AUDIO IS AUTOMATICALLY GENERATED - LTX-2 is the first DiT model
+that generates synchronized audio AND video together!
 """
 
 import base64
@@ -17,194 +18,182 @@ from pathlib import Path
 import runpod
 import torch
 
-# Model paths
-MODELS_DIR = Path("/models")
-MODEL_PATH = MODELS_DIR / "ltx-2-19b-distilled-fp8.safetensors"
-SPATIAL_UPSAMPLER_PATH = MODELS_DIR / "ltx-2-spatial-upscaler-x2-1.0.safetensors"
-GEMMA_PATH = MODELS_DIR / "gemma-3-12b-it-qat-q4_0-unquantized"
+# Model paths - check multiple locations
+VOLUME_PATH = Path("/runpod-volume/models")
+LOCAL_PATH = Path("/models")
+
+def get_model_paths():
+    """Get model paths, preferring volume storage."""
+    # Check if volume exists and has models
+    if VOLUME_PATH.exists():
+        base = VOLUME_PATH
+    else:
+        base = LOCAL_PATH
+    
+    base.mkdir(parents=True, exist_ok=True)
+    
+    return {
+        "model": base / "ltx-2-19b-distilled-fp8.safetensors",
+        "upsampler": base / "ltx-2-spatial-upscaler-x2-1.0.safetensors", 
+        "gemma": base / "gemma-3-12b-it-qat-q4_0-unquantized",
+        "base": base
+    }
 
 # HuggingFace model info
 HF_LTX_REPO = "Lightricks/LTX-2"
 HF_GEMMA_REPO = "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
-# Lazy load the pipeline components
+# Lazy load the pipeline
 _pipeline = None
 
 
 def download_models():
     """Download models from HuggingFace if not already present."""
     from huggingface_hub import hf_hub_download, snapshot_download
-
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    paths = get_model_paths()
+    base = paths["base"]
+    
+    print(f"📂 Using model directory: {base}")
 
     # Download LTX-2 main model
-    if not MODEL_PATH.exists():
-        print(f"Downloading LTX-2 model to {MODEL_PATH}...")
+    if not paths["model"].exists():
+        print(f"⬇️  Downloading LTX-2 model (~10GB)...")
         hf_hub_download(
             repo_id=HF_LTX_REPO,
             filename="ltx-2-19b-distilled-fp8.safetensors",
-            local_dir=str(MODELS_DIR),
+            local_dir=str(base),
             local_dir_use_symlinks=False,
         )
-        print("✓ LTX-2 model downloaded")
+        print("✅ LTX-2 model downloaded")
     else:
-        print(f"✓ LTX-2 model already exists at {MODEL_PATH}")
+        print(f"✅ LTX-2 model found at {paths['model']}")
 
     # Download Spatial Upsampler
-    if not SPATIAL_UPSAMPLER_PATH.exists():
-        print(f"Downloading Spatial Upsampler to {SPATIAL_UPSAMPLER_PATH}...")
+    if not paths["upsampler"].exists():
+        print(f"⬇️  Downloading Spatial Upsampler (~500MB)...")
         hf_hub_download(
             repo_id=HF_LTX_REPO,
             filename="ltx-2-spatial-upscaler-x2-1.0.safetensors",
-            local_dir=str(MODELS_DIR),
+            local_dir=str(base),
             local_dir_use_symlinks=False,
         )
-        print("✓ Spatial Upsampler downloaded")
+        print("✅ Spatial Upsampler downloaded")
     else:
-        print(f"✓ Spatial Upsampler already exists at {SPATIAL_UPSAMPLER_PATH}")
+        print(f"✅ Spatial Upsampler found at {paths['upsampler']}")
 
     # Download Gemma text encoder
-    if not GEMMA_PATH.exists():
-        print(f"Downloading Gemma text encoder to {GEMMA_PATH}...")
+    if not paths["gemma"].exists():
+        print(f"⬇️  Downloading Gemma text encoder (~12GB)...")
         snapshot_download(
             repo_id=HF_GEMMA_REPO,
-            local_dir=str(GEMMA_PATH),
+            local_dir=str(paths["gemma"]),
             local_dir_use_symlinks=False,
         )
-        print("✓ Gemma text encoder downloaded")
+        print("✅ Gemma text encoder downloaded")
     else:
-        print(f"✓ Gemma text encoder already exists at {GEMMA_PATH}")
+        print(f"✅ Gemma text encoder found at {paths['gemma']}")
 
-    print("All models ready!")
+    print("🎉 All models ready!")
+    return paths
 
 
 def get_pipeline():
-    """Lazy load the pipeline to avoid loading on cold start until needed."""
+    """Lazy load the pipeline."""
     global _pipeline
     if _pipeline is None:
-        # Download models if needed
-        download_models()
-
+        paths = download_models()
+        
         from ltx_pipelines import DistilledPipeline
-
-        # Allow environment variable overrides
-        checkpoint_path = os.environ.get("MODEL_PATH", str(MODEL_PATH))
-        spatial_upsampler_path = os.environ.get("SPATIAL_UPSAMPLER_PATH", str(SPATIAL_UPSAMPLER_PATH))
-        gemma_path = os.environ.get("GEMMA_PATH", str(GEMMA_PATH))
+        
         enable_fp8 = os.environ.get("ENABLE_FP8", "true").lower() == "true"
 
-        print(f"Loading LTX-2 pipeline...")
-        print(f"  Model: {checkpoint_path}")
-        print(f"  Spatial Upsampler: {spatial_upsampler_path}")
-        print(f"  Gemma: {gemma_path}")
-        print(f"  FP8: {enable_fp8}")
+        print("🚀 Loading LTX-2 pipeline...")
+        print(f"   Model: {paths['model']}")
+        print(f"   Upsampler: {paths['upsampler']}")
+        print(f"   Gemma: {paths['gemma']}")
+        print(f"   FP8: {enable_fp8}")
 
         _pipeline = DistilledPipeline(
-            checkpoint_path=checkpoint_path,
-            spatial_upsampler_path=spatial_upsampler_path,
-            gemma_root=gemma_path,
+            checkpoint_path=str(paths["model"]),
+            spatial_upsampler_path=str(paths["upsampler"]),
+            gemma_root=str(paths["gemma"]),
             loras=[],
             fp8transformer=enable_fp8,
         )
-        print("Pipeline loaded successfully!")
+        print("✅ Pipeline loaded!")
 
     return _pipeline
 
 
 def download_image_from_url(url: str, output_path: str) -> None:
-    """Download an image from a URL and save it locally."""
-    print(f"Downloading image from {url}...")
+    """Download an image from URL."""
+    print(f"⬇️  Downloading image from {url[:50]}...")
     urllib.request.urlretrieve(url, output_path)
-    print(f"✓ Image saved to {output_path}")
 
 
 def save_image_from_base64(base64_string: str, output_path: str) -> None:
-    """Save a base64 encoded image to a file."""
+    """Save a base64 encoded image to file."""
     from PIL import Image
-
-    # Remove data URL prefix if present
     if "," in base64_string:
         base64_string = base64_string.split(",", 1)[1]
-
     image_data = base64.b64decode(base64_string)
     image = Image.open(io.BytesIO(image_data))
     image.save(output_path)
 
 
-def encode_video_to_base64(video_path: str) -> str:
-    """Read a video file and encode it to base64."""
-    with open(video_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def encode_audio_to_base64(audio_path: str) -> str:
-    """Read an audio file and encode it to base64."""
-    with open(audio_path, "rb") as f:
+def encode_to_base64(file_path: str) -> str:
+    """Read file and encode to base64."""
+    with open(file_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
 @torch.inference_mode()
 def handler(job: dict) -> dict:
     """
-    RunPod handler for LTX-2 video generation with synchronized audio.
-
-    ═══════════════════════════════════════════════════════════════════
-    INPUT SCHEMA (Compatible with n8n workflows)
-    ═══════════════════════════════════════════════════════════════════
-
+    LTX-2 Video + Audio Generation Handler
+    
+    🎵 GENERATES SYNCHRONIZED AUDIO AUTOMATICALLY!
+    
+    ════════════════════════════════════════════════════════
+    INPUT (Compatible with n8n workflows)
+    ════════════════════════════════════════════════════════
     {
-        "input": {
-            // === REQUIRED ===
-            "prompt": str,                    // Text prompt describing the video/audio
-
-            // === OPTIONAL - Video Settings ===
-            "seed": int,                      // Random seed (default: 42)
-            "height": int,                    // Video height (default: 544, must be divisible by 64)
-            "width": int,                     // Video width (default: 960, must be divisible by 64)
-            "num_frames": int,                // Number of frames (default: 97, must be k*8+1)
-            "frame_rate": float,              // Frame rate (default: 25.0)
-            "enhance_prompt": bool,           // AI prompt enhancement (default: false)
-
-            // === OPTIONAL - Image Conditioning (Image-to-Video) ===
-            // Method 1: Single image URL (for n8n compatibility)
-            "image_url": str | [str],         // URL(s) to conditioning image(s)
-
-            // Method 2: Detailed image config
-            "images": [
-                {
-                    "image": str,             // Base64 encoded image OR URL
-                    "frame_index": int,       // Frame index to condition on (default: 0)
-                    "strength": float         // Conditioning strength (default: 1.0)
-                }
-            ],
-
-            // === OPTIONAL - Audio Settings ===
-            "generate_audio": bool,           // Generate audio (default: true)
-            "return_audio_separate": bool     // Return audio as separate base64 (default: false)
-        }
+      "input": {
+        "prompt": "A cat playing piano",     // Required
+        "image_url": "https://...",          // Optional: for image-to-video
+        "seed": 42,                          // Optional (default: 42)
+        "width": 960,                        // Optional (default: 960, must be ÷64)
+        "height": 544,                       // Optional (default: 544, must be ÷64)  
+        "num_frames": 97,                    // Optional (default: 97, must be k*8+1)
+        "frame_rate": 25.0,                  // Optional (default: 25.0)
+        "enhance_prompt": false,             // Optional: AI prompt enhancement
+        "generate_audio": true,              // Optional: generate audio (default: true)
+        "return_audio_separate": false       // Optional: return audio as separate base64
+      }
     }
-
-    ═══════════════════════════════════════════════════════════════════
-    OUTPUT SCHEMA
-    ═══════════════════════════════════════════════════════════════════
-
+    
+    ════════════════════════════════════════════════════════
+    OUTPUT
+    ════════════════════════════════════════════════════════
     {
-        "video": str,              // Base64 encoded MP4 video (with embedded audio if generated)
-        "audio": str | null,       // Base64 encoded WAV audio (only if return_audio_separate=true)
-        "seed": int,               // Seed used for generation
-        "prompt": str,             // Prompt used (may be enhanced)
-        "duration": float,         // Video duration in seconds
-        "has_audio": bool          // Whether audio was generated
+      "video": "<base64 MP4 with embedded audio>",
+      "audio": "<base64 WAV>",               // Only if return_audio_separate=true
+      "seed": 42,
+      "prompt": "...",
+      "duration": 3.88,
+      "has_audio": true
     }
     """
     try:
         job_input = job.get("input", {})
 
-        # Extract parameters with defaults
+        # Required
         prompt = job_input.get("prompt")
         if not prompt:
             return {"error": "Missing required parameter: prompt"}
 
+        # Optional parameters
         seed = int(job_input.get("seed", 42))
         height = int(job_input.get("height", 544))
         width = int(job_input.get("width", 960))
@@ -214,82 +203,69 @@ def handler(job: dict) -> dict:
         generate_audio = bool(job_input.get("generate_audio", True))
         return_audio_separate = bool(job_input.get("return_audio_separate", False))
 
-        # Validate resolution for two-stage pipeline (must be divisible by 64)
+        # Validation
         if height % 64 != 0 or width % 64 != 0:
-            return {
-                "error": f"Resolution ({height}x{width}) must be divisible by 64 for the two-stage pipeline"
-            }
-
-        # Validate frame count (must be k*8 + 1)
+            return {"error": f"Resolution ({width}x{height}) must be divisible by 64"}
+        
         if (num_frames - 1) % 8 != 0:
-            return {
-                "error": f"num_frames must be k*8+1 (e.g., 9, 17, 25, ..., 97). Got: {num_frames}"
-            }
+            return {"error": f"num_frames must be k*8+1 (9,17,25,...97). Got: {num_frames}"}
 
-        # Process conditioning images from multiple input formats
+        # Process images
         images = []
-
+        
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
-            # Method 1: Handle image_url parameter (n8n compatibility)
+            # Handle image_url (single URL or list)
             image_url = job_input.get("image_url")
             if image_url:
-                # Can be a single URL or list of URLs
                 urls = image_url if isinstance(image_url, list) else [image_url]
                 for idx, url in enumerate(urls):
                     if url and isinstance(url, str) and url.startswith("http"):
-                        image_path = temp_path / f"url_image_{idx}.png"
-                        download_image_from_url(url, str(image_path))
-                        images.append((str(image_path), 0, 1.0))  # frame_index=0, strength=1.0
+                        img_path = temp_path / f"url_img_{idx}.png"
+                        download_image_from_url(url, str(img_path))
+                        images.append((str(img_path), 0, 1.0))
 
-            # Method 2: Handle images array parameter
-            input_images = job_input.get("images", [])
-            for idx, img_data in enumerate(input_images):
+            # Handle images array
+            for idx, img_data in enumerate(job_input.get("images", [])):
                 if isinstance(img_data, dict):
-                    image_content = img_data.get("image", "")
-                    frame_index = int(img_data.get("frame_index", 0))
+                    content = img_data.get("image", "")
+                    frame_idx = int(img_data.get("frame_index", 0))
                     strength = float(img_data.get("strength", 1.0))
                 else:
-                    # Backwards compatibility: just a string (base64 or URL)
-                    image_content = img_data
-                    frame_index = 0
-                    strength = 1.0
+                    content, frame_idx, strength = img_data, 0, 1.0
 
-                if image_content:
-                    image_path = temp_path / f"input_image_{idx}.png"
-
-                    # Check if it's a URL or base64
-                    if isinstance(image_content, str) and image_content.startswith("http"):
-                        download_image_from_url(image_content, str(image_path))
+                if content:
+                    img_path = temp_path / f"img_{idx}.png"
+                    if content.startswith("http"):
+                        download_image_from_url(content, str(img_path))
                     else:
-                        save_image_from_base64(image_content, str(image_path))
+                        save_image_from_base64(content, str(img_path))
+                    images.append((str(img_path), frame_idx, strength))
 
-                    images.append((str(image_path), frame_index, strength))
-
-            # Get the pipeline (lazy loaded, downloads models if needed)
+            # Load pipeline
             pipeline = get_pipeline()
 
-            # Configure tiling for memory efficiency
+            # Tiling config
             from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
-
             tiling_config = TilingConfig.default()
-            video_chunks_number = get_video_chunks_number(num_frames, tiling_config)
+            video_chunks = get_video_chunks_number(num_frames, tiling_config)
 
-            print("=" * 60)
-            print("LTX-2 Video + Audio Generation")
-            print("=" * 60)
-            print(f"Resolution: {width}x{height}")
-            print(f"Frames: {num_frames} @ {frame_rate}fps")
-            print(f"Duration: {num_frames / frame_rate:.2f}s")
-            print(f"Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"Prompt: {prompt}")
-            print(f"Seed: {seed}")
-            print(f"Generate Audio: {generate_audio}")
+            duration = num_frames / frame_rate
+            
+            print("=" * 50)
+            print("🎬 LTX-2 Video + Audio Generation")
+            print("=" * 50)
+            print(f"📐 Resolution: {width}x{height}")
+            print(f"🎞️  Frames: {num_frames} @ {frame_rate}fps = {duration:.1f}s")
+            print(f"💬 Prompt: {prompt[:80]}{'...' if len(prompt) > 80 else ''}")
+            print(f"🎲 Seed: {seed}")
+            print(f"🎵 Audio: {'Yes' if generate_audio else 'No'}")
             if images:
-                print(f"Conditioning Images: {len(images)}")
-            print("=" * 60)
+                print(f"🖼️  Input images: {len(images)}")
+            print("=" * 50)
 
-            # Generate video (audio is always generated by the pipeline)
+            # Generate video + audio
             video, audio = pipeline(
                 prompt=prompt,
                 seed=seed,
@@ -302,11 +278,10 @@ def handler(job: dict) -> dict:
                 enhance_prompt=enhance_prompt,
             )
 
-            # Prepare output
+            # Encode output
             from ltx_pipelines.utils.constants import AUDIO_SAMPLE_RATE
             from ltx_pipelines.utils.media_io import encode_video
 
-            # Save video with embedded audio
             output_path = temp_path / "output.mp4"
             encode_video(
                 video=video,
@@ -314,35 +289,27 @@ def handler(job: dict) -> dict:
                 audio=audio if generate_audio else None,
                 audio_sample_rate=AUDIO_SAMPLE_RATE if generate_audio else None,
                 output_path=str(output_path),
-                video_chunks_number=video_chunks_number,
+                video_chunks_number=video_chunks,
             )
 
-            # Encode video to base64
-            video_base64 = encode_video_to_base64(str(output_path))
-
-            duration = num_frames / frame_rate
-
-            # Prepare response
             response = {
-                "video": video_base64,
+                "video": encode_to_base64(str(output_path)),
                 "seed": seed,
                 "prompt": prompt,
                 "duration": duration,
                 "has_audio": generate_audio and audio is not None,
             }
 
-            # Optionally return audio separately
+            # Separate audio if requested
             if return_audio_separate and audio is not None:
                 import torchaudio
                 audio_path = temp_path / "output.wav"
                 torchaudio.save(str(audio_path), audio.cpu(), AUDIO_SAMPLE_RATE)
-                response["audio"] = encode_audio_to_base64(str(audio_path))
+                response["audio"] = encode_to_base64(str(audio_path))
 
-            print("=" * 60)
-            print(f"✓ Generation complete!")
-            print(f"  Duration: {duration:.2f}s")
-            print(f"  Audio: {'Yes' if response['has_audio'] else 'No'}")
-            print("=" * 60)
+            print("=" * 50)
+            print(f"✅ Complete! {duration:.1f}s video" + (" + audio" if response["has_audio"] else ""))
+            print("=" * 50)
 
             return response
 
@@ -351,5 +318,5 @@ def handler(job: dict) -> dict:
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
-# Start the RunPod serverless handler
+# Start handler
 runpod.serverless.start({"handler": handler})

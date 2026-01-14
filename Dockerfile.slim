@@ -1,0 +1,45 @@
+# RunPod Serverless Dockerfile for LTX-2 (Slim version)
+# Uses RunPod's pytorch base for faster builds
+
+FROM runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME="/runpod-volume/.cache/huggingface" \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    git-lfs \
+    && rm -rf /var/lib/apt/lists/* \
+    && git lfs install
+
+# Create working directory
+WORKDIR /app
+
+# Copy project files
+COPY packages/ ./packages/
+COPY pyproject.toml ./
+COPY handler.py ./
+
+# Install dependencies (using pip for speed)
+RUN pip install --upgrade pip && \
+    pip install torch==2.4.0 torchaudio --index-url https://download.pytorch.org/whl/cu124 && \
+    pip install -e ./packages/ltx-core -e ./packages/ltx-pipelines && \
+    pip install runpod huggingface-hub hf-transfer
+
+# Create model directory (will use volume or download on first run)
+RUN mkdir -p /models /runpod-volume
+
+# Model paths - models download on first request if not in volume
+ENV MODEL_PATH="/runpod-volume/models/ltx-2-19b-distilled-fp8.safetensors" \
+    SPATIAL_UPSAMPLER_PATH="/runpod-volume/models/ltx-2-spatial-upscaler-x2-1.0.safetensors" \
+    GEMMA_PATH="/runpod-volume/models/gemma-3-12b-it-qat-q4_0-unquantized" \
+    ENABLE_FP8="true"
+
+# Run the handler
+CMD ["python", "-u", "handler.py"]
+
