@@ -1,0 +1,12 @@
+{
+  "input": {
+    "prompt": "A majestic eagle soaring through a clear blue sky, wings spread wide catching thermals, golden sunlight reflecting off its feathers as it circles above a mountain range.",
+    "seed": 42,
+    "height": 544,
+    "width": 960,
+    "num_frames": 97,
+    "frame_rate": 25.0,
+    "enhance_prompt": false
+  }
+}
+

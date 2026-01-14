@@ -116,3 +116,201 @@ Each package includes comprehensive documentation:
 * **[LTX-Core README](packages/ltx-core/README.md)** - Core model implementation, inference stack, and utilities
 * **[LTX-Pipelines README](packages/ltx-pipelines/README.md)** - High-level pipeline implementations and usage guides
 * **[LTX-Trainer README](packages/ltx-trainer/README.md)** - Training and fine-tuning documentation with detailed guides
+
+## ☁️ RunPod Serverless Deployment
+
+Deploy LTX-2 as a serverless API on RunPod for scalable video generation.
+
+### Prerequisites
+
+1. A [RunPod account](https://runpod.io)
+2. Docker installed locally (for building the image)
+3. Model files downloaded (see [Required Models](#required-models))
+
+### Quick Deploy
+
+#### Step 1: Prepare Model Storage
+
+Upload your models to a network volume or cloud storage (S3, HuggingFace, etc.). Required files:
+
+```
+/models/
+├── ltx-2-19b-distilled-fp8.safetensors    # Main model (FP8 recommended)
+├── ltx-2-spatial-upscaler-x2-1.0.safetensors
+└── gemma-3-12b-it-qat-q4_0-unquantized/   # Gemma text encoder directory
+```
+
+#### Step 2: Build and Push Docker Image
+
+```bash
+# Build the image
+docker build -t your-dockerhub/ltx2-serverless:latest .
+
+# Push to Docker Hub (or your preferred registry)
+docker push your-dockerhub/ltx2-serverless:latest
+```
+
+#### Step 3: Create RunPod Serverless Endpoint
+
+1. Go to [RunPod Serverless](https://www.runpod.io/console/serverless)
+2. Click **New Endpoint**
+3. Configure:
+   - **Container Image**: `your-dockerhub/ltx2-serverless:latest`
+   - **GPU**: RTX 4090 (24GB) or A100 (40GB+) recommended
+   - **Container Disk**: 20GB+
+   - **Volume**: Mount your models volume to `/models`
+4. Set Environment Variables:
+   ```
+   MODEL_PATH=/models/ltx-2-19b-distilled-fp8.safetensors
+   SPATIAL_UPSAMPLER_PATH=/models/ltx-2-spatial-upscaler-x2-1.0.safetensors
+   GEMMA_PATH=/models/gemma-3-12b-it-qat-q4_0-unquantized
+   ENABLE_FP8=true
+   ```
+
+### API Reference
+
+#### Request Schema
+
+```json
+{
+  "input": {
+    "prompt": "A majestic eagle soaring through clouds...",
+    "seed": 42,
+    "height": 544,
+    "width": 960,
+    "num_frames": 97,
+    "frame_rate": 25.0,
+    "enhance_prompt": false,
+    "images": [
+      {
+        "image": "<base64-encoded-image>",
+        "frame_index": 0,
+        "strength": 1.0
+      }
+    ]
+  }
+}
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | string | **required** | Text description of the video to generate |
+| `seed` | int | 42 | Random seed for reproducibility |
+| `height` | int | 544 | Video height (must be divisible by 64) |
+| `width` | int | 960 | Video width (must be divisible by 64) |
+| `num_frames` | int | 97 | Number of frames (must be k×8+1: 9, 17, 25, ..., 97) |
+| `frame_rate` | float | 25.0 | Video frame rate |
+| `enhance_prompt` | bool | false | Use AI to enhance the prompt |
+| `images` | array | [] | Conditioning images for image-to-video |
+
+#### Response Schema
+
+```json
+{
+  "video": "<base64-encoded-mp4>",
+  "seed": 42,
+  "prompt": "A majestic eagle...",
+  "duration": 3.88
+}
+```
+
+### Example: Python Client
+
+```python
+import requests
+import base64
+import time
+
+RUNPOD_API_KEY = "your-api-key"
+ENDPOINT_ID = "your-endpoint-id"
+
+def generate_video(prompt, **kwargs):
+    url = f"https://api.runpod.ai/v2/{ENDPOINT_ID}/run"
+    headers = {"Authorization": f"Bearer {RUNPOD_API_KEY}"}
+    
+    payload = {
+        "input": {
+            "prompt": prompt,
+            "seed": kwargs.get("seed", 42),
+            "height": kwargs.get("height", 544),
+            "width": kwargs.get("width", 960),
+            "num_frames": kwargs.get("num_frames", 97),
+            "frame_rate": kwargs.get("frame_rate", 25.0),
+        }
+    }
+    
+    # Submit job
+    response = requests.post(url, json=payload, headers=headers)
+    job_id = response.json()["id"]
+    
+    # Poll for completion
+    status_url = f"https://api.runpod.ai/v2/{ENDPOINT_ID}/status/{job_id}"
+    while True:
+        status = requests.get(status_url, headers=headers).json()
+        if status["status"] == "COMPLETED":
+            # Decode and save video
+            video_b64 = status["output"]["video"]
+            with open("output.mp4", "wb") as f:
+                f.write(base64.b64decode(video_b64))
+            return status["output"]
+        elif status["status"] == "FAILED":
+            raise Exception(status.get("error", "Job failed"))
+        time.sleep(2)
+
+# Generate a video
+result = generate_video(
+    "A serene Japanese garden with cherry blossoms falling gently, "
+    "koi fish swimming in a crystal clear pond, soft morning light "
+    "filtering through the trees."
+)
+print(f"Generated {result['duration']:.1f}s video")
+```
+
+### Example: Image-to-Video
+
+```python
+import base64
+
+# Load and encode your image
+with open("input_image.png", "rb") as f:
+    image_b64 = base64.b64encode(f.read()).decode()
+
+result = generate_video(
+    prompt="The scene comes alive with gentle movement...",
+    images=[{
+        "image": image_b64,
+        "frame_index": 0,
+        "strength": 1.0
+    }]
+)
+```
+
+### Local Testing
+
+Test the handler locally before deploying:
+
+```bash
+# Set environment variables
+export MODEL_PATH=/path/to/ltx-2-19b-distilled-fp8.safetensors
+export SPATIAL_UPSAMPLER_PATH=/path/to/ltx-2-spatial-upscaler-x2-1.0.safetensors
+export GEMMA_PATH=/path/to/gemma-3-12b-it-qat-q4_0-unquantized
+
+# Run the handler
+python handler.py
+```
+
+### GPU Recommendations
+
+| GPU | VRAM | Performance | Notes |
+|-----|------|-------------|-------|
+| RTX 4090 | 24GB | Good | Use FP8, smaller resolutions |
+| A100 40GB | 40GB | Excellent | Full resolution support |
+| A100 80GB | 80GB | Best | Batch processing capable |
+| H100 | 80GB | Best | Fastest inference |
+
+### Cost Optimization Tips
+
+1. **Use FP8 models** - Reduces VRAM usage, enabling smaller GPU tiers
+2. **Use DistilledPipeline** - Faster inference = lower cost per video
+3. **Set appropriate idle timeout** - Balance between cold start time and cost
+4. **Use Flash Workers** - For predictable workloads with consistent traffic
