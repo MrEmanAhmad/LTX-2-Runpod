@@ -1,15 +1,17 @@
 """
 RunPod Serverless Handler for LTX-2 Video Generation
-Supports text-to-video and image-to-video generation with audio.
+Supports text-to-video and image-to-video generation with synchronized audio.
 Models are automatically downloaded from HuggingFace on first run.
+
+Audio is automatically generated and embedded in the video output.
 """
 
 import base64
 import io
 import os
-import subprocess
 import tempfile
 import traceback
+import urllib.request
 from pathlib import Path
 
 import runpod
@@ -109,6 +111,13 @@ def get_pipeline():
     return _pipeline
 
 
+def download_image_from_url(url: str, output_path: str) -> None:
+    """Download an image from a URL and save it locally."""
+    print(f"Downloading image from {url}...")
+    urllib.request.urlretrieve(url, output_path)
+    print(f"✓ Image saved to {output_path}")
+
+
 def save_image_from_base64(base64_string: str, output_path: str) -> None:
     """Save a base64 encoded image to a file."""
     from PIL import Image
@@ -128,37 +137,64 @@ def encode_video_to_base64(video_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+def encode_audio_to_base64(audio_path: str) -> str:
+    """Read an audio file and encode it to base64."""
+    with open(audio_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
 @torch.inference_mode()
 def handler(job: dict) -> dict:
     """
-    RunPod handler for LTX-2 video generation.
+    RunPod handler for LTX-2 video generation with synchronized audio.
 
-    Input schema:
+    ═══════════════════════════════════════════════════════════════════
+    INPUT SCHEMA (Compatible with n8n workflows)
+    ═══════════════════════════════════════════════════════════════════
+
     {
         "input": {
-            "prompt": str,                    # Required: Text prompt for generation
-            "seed": int,                      # Optional: Random seed (default: 42)
-            "height": int,                    # Optional: Video height (default: 544, must be divisible by 64)
-            "width": int,                     # Optional: Video width (default: 960, must be divisible by 64)
-            "num_frames": int,                # Optional: Number of frames (default: 97, must be k*8+1)
-            "frame_rate": float,              # Optional: Frame rate (default: 25.0)
-            "enhance_prompt": bool,           # Optional: Use prompt enhancement (default: false)
-            "images": [                       # Optional: List of conditioning images
+            // === REQUIRED ===
+            "prompt": str,                    // Text prompt describing the video/audio
+
+            // === OPTIONAL - Video Settings ===
+            "seed": int,                      // Random seed (default: 42)
+            "height": int,                    // Video height (default: 544, must be divisible by 64)
+            "width": int,                     // Video width (default: 960, must be divisible by 64)
+            "num_frames": int,                // Number of frames (default: 97, must be k*8+1)
+            "frame_rate": float,              // Frame rate (default: 25.0)
+            "enhance_prompt": bool,           // AI prompt enhancement (default: false)
+
+            // === OPTIONAL - Image Conditioning (Image-to-Video) ===
+            // Method 1: Single image URL (for n8n compatibility)
+            "image_url": str | [str],         // URL(s) to conditioning image(s)
+
+            // Method 2: Detailed image config
+            "images": [
                 {
-                    "image": str,             # Base64 encoded image or URL
-                    "frame_index": int,       # Frame index to condition on (default: 0)
-                    "strength": float         # Conditioning strength (default: 1.0)
+                    "image": str,             // Base64 encoded image OR URL
+                    "frame_index": int,       // Frame index to condition on (default: 0)
+                    "strength": float         // Conditioning strength (default: 1.0)
                 }
-            ]
+            ],
+
+            // === OPTIONAL - Audio Settings ===
+            "generate_audio": bool,           // Generate audio (default: true)
+            "return_audio_separate": bool     // Return audio as separate base64 (default: false)
         }
     }
 
-    Output schema:
+    ═══════════════════════════════════════════════════════════════════
+    OUTPUT SCHEMA
+    ═══════════════════════════════════════════════════════════════════
+
     {
-        "video": str,           # Base64 encoded MP4 video with audio
-        "seed": int,            # Seed used for generation
-        "prompt": str,          # Prompt used (may be enhanced)
-        "duration": float       # Video duration in seconds
+        "video": str,              // Base64 encoded MP4 video (with embedded audio if generated)
+        "audio": str | null,       // Base64 encoded WAV audio (only if return_audio_separate=true)
+        "seed": int,               // Seed used for generation
+        "prompt": str,             // Prompt used (may be enhanced)
+        "duration": float,         // Video duration in seconds
+        "has_audio": bool          // Whether audio was generated
     }
     """
     try:
@@ -175,6 +211,8 @@ def handler(job: dict) -> dict:
         num_frames = int(job_input.get("num_frames", 97))
         frame_rate = float(job_input.get("frame_rate", 25.0))
         enhance_prompt = bool(job_input.get("enhance_prompt", False))
+        generate_audio = bool(job_input.get("generate_audio", True))
+        return_audio_separate = bool(job_input.get("return_audio_separate", False))
 
         # Validate resolution for two-stage pipeline (must be divisible by 64)
         if height % 64 != 0 or width % 64 != 0:
@@ -188,27 +226,45 @@ def handler(job: dict) -> dict:
                 "error": f"num_frames must be k*8+1 (e.g., 9, 17, 25, ..., 97). Got: {num_frames}"
             }
 
-        # Process conditioning images
+        # Process conditioning images from multiple input formats
         images = []
-        input_images = job_input.get("images", [])
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
+            # Method 1: Handle image_url parameter (n8n compatibility)
+            image_url = job_input.get("image_url")
+            if image_url:
+                # Can be a single URL or list of URLs
+                urls = image_url if isinstance(image_url, list) else [image_url]
+                for idx, url in enumerate(urls):
+                    if url and isinstance(url, str) and url.startswith("http"):
+                        image_path = temp_path / f"url_image_{idx}.png"
+                        download_image_from_url(url, str(image_path))
+                        images.append((str(image_path), 0, 1.0))  # frame_index=0, strength=1.0
+
+            # Method 2: Handle images array parameter
+            input_images = job_input.get("images", [])
             for idx, img_data in enumerate(input_images):
                 if isinstance(img_data, dict):
                     image_content = img_data.get("image", "")
                     frame_index = int(img_data.get("frame_index", 0))
                     strength = float(img_data.get("strength", 1.0))
                 else:
-                    # Backwards compatibility: just a base64 string
+                    # Backwards compatibility: just a string (base64 or URL)
                     image_content = img_data
                     frame_index = 0
                     strength = 1.0
 
                 if image_content:
                     image_path = temp_path / f"input_image_{idx}.png"
-                    save_image_from_base64(image_content, str(image_path))
+
+                    # Check if it's a URL or base64
+                    if isinstance(image_content, str) and image_content.startswith("http"):
+                        download_image_from_url(image_content, str(image_path))
+                    else:
+                        save_image_from_base64(image_content, str(image_path))
+
                     images.append((str(image_path), frame_index, strength))
 
             # Get the pipeline (lazy loaded, downloads models if needed)
@@ -220,13 +276,20 @@ def handler(job: dict) -> dict:
             tiling_config = TilingConfig.default()
             video_chunks_number = get_video_chunks_number(num_frames, tiling_config)
 
-            print(f"Generating video: {width}x{height}, {num_frames} frames @ {frame_rate}fps")
-            print(f"Prompt: {prompt}")
+            print("=" * 60)
+            print("LTX-2 Video + Audio Generation")
+            print("=" * 60)
+            print(f"Resolution: {width}x{height}")
+            print(f"Frames: {num_frames} @ {frame_rate}fps")
+            print(f"Duration: {num_frames / frame_rate:.2f}s")
+            print(f"Prompt: {prompt[:100]}..." if len(prompt) > 100 else f"Prompt: {prompt}")
             print(f"Seed: {seed}")
+            print(f"Generate Audio: {generate_audio}")
             if images:
-                print(f"Conditioning images: {len(images)}")
+                print(f"Conditioning Images: {len(images)}")
+            print("=" * 60)
 
-            # Generate video
+            # Generate video (audio is always generated by the pipeline)
             video, audio = pipeline(
                 prompt=prompt,
                 seed=seed,
@@ -239,17 +302,17 @@ def handler(job: dict) -> dict:
                 enhance_prompt=enhance_prompt,
             )
 
-            # Save to temp file
-            output_path = temp_path / "output.mp4"
-
+            # Prepare output
             from ltx_pipelines.utils.constants import AUDIO_SAMPLE_RATE
             from ltx_pipelines.utils.media_io import encode_video
 
+            # Save video with embedded audio
+            output_path = temp_path / "output.mp4"
             encode_video(
                 video=video,
                 fps=int(frame_rate),
-                audio=audio,
-                audio_sample_rate=AUDIO_SAMPLE_RATE,
+                audio=audio if generate_audio else None,
+                audio_sample_rate=AUDIO_SAMPLE_RATE if generate_audio else None,
                 output_path=str(output_path),
                 video_chunks_number=video_chunks_number,
             )
@@ -259,49 +322,34 @@ def handler(job: dict) -> dict:
 
             duration = num_frames / frame_rate
 
-            print(f"Generation complete! Duration: {duration:.2f}s")
-
-            return {
+            # Prepare response
+            response = {
                 "video": video_base64,
                 "seed": seed,
                 "prompt": prompt,
                 "duration": duration,
+                "has_audio": generate_audio and audio is not None,
             }
+
+            # Optionally return audio separately
+            if return_audio_separate and audio is not None:
+                import torchaudio
+                audio_path = temp_path / "output.wav"
+                torchaudio.save(str(audio_path), audio.cpu(), AUDIO_SAMPLE_RATE)
+                response["audio"] = encode_audio_to_base64(str(audio_path))
+
+            print("=" * 60)
+            print(f"✓ Generation complete!")
+            print(f"  Duration: {duration:.2f}s")
+            print(f"  Audio: {'Yes' if response['has_audio'] else 'No'}")
+            print("=" * 60)
+
+            return response
 
     except Exception as e:
         traceback.print_exc()
         return {"error": str(e), "traceback": traceback.format_exc()}
 
 
-# For local testing
-if __name__ == "__main__":
-    # Check if running in RunPod environment
-    if os.environ.get("RUNPOD_POD_ID"):
-        runpod.serverless.start({"handler": handler})
-    else:
-        # Local testing mode
-        print("Running in local test mode...")
-        print("To test, call: python handler.py")
-
-        # Simple test
-        test_input = {
-            "input": {
-                "prompt": "A serene mountain landscape with flowing clouds and gentle wind rustling through pine trees.",
-                "seed": 42,
-                "height": 544,
-                "width": 960,
-                "num_frames": 25,
-                "frame_rate": 25.0,
-            }
-        }
-
-        result = handler(test_input)
-
-        if "error" in result:
-            print(f"Error: {result['error']}")
-        else:
-            print(f"Success! Generated {result['duration']:.2f}s video")
-            # Save the video locally
-            with open("test_output.mp4", "wb") as f:
-                f.write(base64.b64decode(result["video"]))
-            print("Saved to test_output.mp4")
+# Start the RunPod serverless handler
+runpod.serverless.start({"handler": handler})
