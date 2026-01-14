@@ -1,0 +1,73 @@
+{
+  "title": "LTX-2 Video Generator",
+  "description": "Generate high-quality AI videos with synchronized audio using Lightricks LTX-2 model. Supports text-to-video and image-to-video generation with the fastest distilled pipeline.",
+  "type": "serverless",
+  "category": "video",
+  "iconUrl": "https://raw.githubusercontent.com/MrEmanAhmad/LTX-2-Runpod/main/.runpod/icon.png",
+  "config": {
+    "runsOn": "GPU",
+    "containerDiskInGb": 30,
+    "volumeInGb": 100,
+    "presets": [
+      {
+        "name": "FP8 Distilled (Recommended)",
+        "description": "Fastest inference with FP8 quantization - best for RTX 4090",
+        "defaults": {
+          "MODEL_PATH": "/models/ltx-2-19b-distilled-fp8.safetensors",
+          "SPATIAL_UPSAMPLER_PATH": "/models/ltx-2-spatial-upscaler-x2-1.0.safetensors",
+          "GEMMA_PATH": "/models/gemma-3-12b-it-qat-q4_0-unquantized",
+          "ENABLE_FP8": "true"
+        }
+      },
+      {
+        "name": "Full Precision Distilled",
+        "description": "Higher quality with full precision - requires 40GB+ VRAM",
+        "defaults": {
+          "MODEL_PATH": "/models/ltx-2-19b-distilled.safetensors",
+          "SPATIAL_UPSAMPLER_PATH": "/models/ltx-2-spatial-upscaler-x2-1.0.safetensors",
+          "GEMMA_PATH": "/models/gemma-3-12b-it-qat-q4_0-unquantized",
+          "ENABLE_FP8": "false"
+        }
+      }
+    ],
+    "env": [
+      {
+        "key": "MODEL_PATH",
+        "input": {
+          "name": "Model Path",
+          "type": "string",
+          "description": "Path to the LTX-2 model checkpoint (.safetensors)",
+          "default": "/models/ltx-2-19b-distilled-fp8.safetensors"
+        }
+      },
+      {
+        "key": "SPATIAL_UPSAMPLER_PATH",
+        "input": {
+          "name": "Spatial Upsampler Path",
+          "type": "string",
+          "description": "Path to the spatial upsampler model",
+          "default": "/models/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+        }
+      },
+      {
+        "key": "GEMMA_PATH",
+        "input": {
+          "name": "Gemma Text Encoder Path",
+          "type": "string",
+          "description": "Path to the Gemma text encoder directory",
+          "default": "/models/gemma-3-12b-it-qat-q4_0-unquantized"
+        }
+      },
+      {
+        "key": "ENABLE_FP8",
+        "input": {
+          "name": "Enable FP8",
+          "type": "string",
+          "description": "Use FP8 quantization for lower VRAM usage (true/false)",
+          "default": "true"
+        }
+      }
+    ]
+  }
+}
+

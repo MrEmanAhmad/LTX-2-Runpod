@@ -1,0 +1,77 @@
+{
+  "tests": [
+    {
+      "name": "text_to_video_basic",
+      "description": "Basic text-to-video generation test",
+      "input": {
+        "prompt": "A serene mountain landscape with flowing clouds and gentle wind rustling through pine trees.",
+        "seed": 42,
+        "height": 544,
+        "width": 960,
+        "num_frames": 25,
+        "frame_rate": 25.0
+      },
+      "timeout": 300000
+    },
+    {
+      "name": "text_to_video_short",
+      "description": "Quick generation test with minimal frames",
+      "input": {
+        "prompt": "A butterfly landing on a flower in a garden.",
+        "seed": 123,
+        "height": 544,
+        "width": 960,
+        "num_frames": 9,
+        "frame_rate": 25.0
+      },
+      "timeout": 180000
+    },
+    {
+      "name": "text_to_video_enhanced_prompt",
+      "description": "Test with prompt enhancement enabled",
+      "input": {
+        "prompt": "A cat playing with yarn",
+        "seed": 456,
+        "height": 544,
+        "width": 960,
+        "num_frames": 17,
+        "frame_rate": 25.0,
+        "enhance_prompt": true
+      },
+      "timeout": 300000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA GeForce RTX 4090",
+    "gpuCount": 1,
+    "env": [
+      {
+        "key": "MODEL_PATH",
+        "value": "/models/ltx-2-19b-distilled-fp8.safetensors"
+      },
+      {
+        "key": "SPATIAL_UPSAMPLER_PATH",
+        "value": "/models/ltx-2-spatial-upscaler-x2-1.0.safetensors"
+      },
+      {
+        "key": "GEMMA_PATH",
+        "value": "/models/gemma-3-12b-it-qat-q4_0-unquantized"
+      },
+      {
+        "key": "ENABLE_FP8",
+        "value": "true"
+      }
+    ],
+    "allowedCudaVersions": [
+      "12.7",
+      "12.6",
+      "12.5",
+      "12.4",
+      "12.3",
+      "12.2",
+      "12.1",
+      "12.0"
+    ]
+  }
+}
+
