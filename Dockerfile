@@ -68,8 +68,8 @@ RUN uv pip install --system -e ./packages/ltx-core -e ./packages/ltx-pipelines -
 # Install RunPod and HuggingFace tools
 RUN uv pip install --system runpod huggingface-hub hf-transfer
 
-# Create directories for models
-RUN mkdir -p /models /runpod-volume
+# Create directory for models (container disk fallback)
+RUN mkdir -p /models
 
 # Set environment variables
 ENV ENABLE_FP8="true"

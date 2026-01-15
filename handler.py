@@ -14,31 +14,57 @@ import traceback
 import urllib.request
 from pathlib import Path
 
-import runpod
-import torch
-
 print("=" * 60)
 print("🚀 LTX-2 Video + Audio Generator Starting...")
 print("=" * 60)
 print(f"📦 Python: {sys.version.split()[0]}")
-print(f"🔥 PyTorch: {torch.__version__}")
-print(f"🎮 CUDA available: {torch.cuda.is_available()}")
-if torch.cuda.is_available():
-    print(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+
+try:
+    import runpod
+    print(f"✅ RunPod SDK loaded")
+except ImportError as e:
+    print(f"❌ Failed to import runpod: {e}")
+    raise
+
+try:
+    import torch
+    print(f"🔥 PyTorch: {torch.__version__}")
+    print(f"🎮 CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+    else:
+        print("⚠️  WARNING: CUDA not available!")
+except ImportError as e:
+    print(f"❌ Failed to import torch: {e}")
+    raise
+
+# Test critical imports early
+try:
+    from ltx_pipelines import DistilledPipeline
+    from ltx_core.model.video_vae import TilingConfig
+    print("✅ LTX packages loaded")
+except ImportError as e:
+    print(f"❌ Failed to import LTX packages: {e}")
+    traceback.print_exc()
+    raise
+
 print("=" * 60)
 
 # Model paths - priority order for RunPod Serverless
 def get_model_paths():
     """Get model paths, preferring network volume for persistence."""
-    import os
     
-    # Priority 1: /runpod-volume (serverless network volume mount point)
-    if Path("/runpod-volume").exists():
-        base = Path("/runpod-volume/models")
+    # Check if network volume is actually mounted (not just directory exists)
+    runpod_vol = Path("/runpod-volume")
+    workspace_vol = Path("/workspace")
+    
+    # Priority 1: /runpod-volume if it's a mount point (serverless network volume)
+    if runpod_vol.exists() and runpod_vol.is_mount():
+        base = runpod_vol / "models"
         print(f"📂 Using network volume: {base}")
-    # Priority 2: /workspace (GPU pod volume mount)
-    elif Path("/workspace").exists() and Path("/workspace").is_mount():
-        base = Path("/workspace/models")
+    # Priority 2: /workspace if it's a mount point (GPU pod volume)
+    elif workspace_vol.exists() and workspace_vol.is_mount():
+        base = workspace_vol / "models"
         print(f"📂 Using workspace volume: {base}")
     # Priority 3: Container disk fallback
     else:
@@ -75,6 +101,13 @@ def download_models():
     
     paths = get_model_paths()
     base = paths["base"]
+    
+    # Get HuggingFace token for gated models (Gemma requires this)
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if hf_token:
+        print("🔑 HuggingFace token found")
+    else:
+        print("⚠️  No HF_TOKEN found - gated models may fail to download")
 
     # Download LTX-2 model
     if not paths["model"].exists():
@@ -84,6 +117,7 @@ def download_models():
             filename="ltx-2-19b-distilled-fp8.safetensors",
             local_dir=str(base),
             local_dir_use_symlinks=False,
+            token=hf_token,
         )
         print("✅ LTX-2 model ready")
     else:
@@ -97,18 +131,24 @@ def download_models():
             filename="ltx-2-spatial-upscaler-x2-1.0.safetensors",
             local_dir=str(base),
             local_dir_use_symlinks=False,
+            token=hf_token,
         )
         print("✅ Spatial Upsampler ready")
     else:
         print(f"✅ Spatial Upsampler exists: {paths['upsampler']}")
 
-    # Download Gemma
+    # Download Gemma (GATED MODEL - requires token!)
     if not paths["gemma"].exists() or not any(paths["gemma"].iterdir() if paths["gemma"].exists() else []):
         print("⬇️  Downloading Gemma text encoder (~12GB)...")
+        if not hf_token:
+            print("❌ ERROR: Gemma is a gated model - HF_TOKEN required!")
+            print("   Set HF_TOKEN environment variable with your HuggingFace token")
+            raise ValueError("HF_TOKEN required for Gemma model download")
         snapshot_download(
             repo_id=HF_GEMMA_REPO,
             local_dir=str(paths["gemma"]),
             local_dir_use_symlinks=False,
+            token=hf_token,
         )
         print("✅ Gemma text encoder ready")
     else:
@@ -128,8 +168,6 @@ def get_pipeline():
         print("=" * 50)
         
         paths = download_models()
-        
-        from ltx_pipelines import DistilledPipeline
         
         enable_fp8 = os.environ.get("ENABLE_FP8", "true").lower() == "true"
 
@@ -267,7 +305,7 @@ def handler(job: dict) -> dict:
             pipeline = get_pipeline()
 
             # Setup tiling
-            from ltx_core.model.video_vae import TilingConfig, get_video_chunks_number
+            from ltx_core.model.video_vae import get_video_chunks_number
             tiling = TilingConfig.default()
             chunks = get_video_chunks_number(num_frames, tiling)
 
