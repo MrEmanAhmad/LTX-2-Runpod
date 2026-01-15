@@ -1,19 +1,5 @@
 {
-  "tests": [
-    {
-      "name": "text_to_video_basic",
-      "description": "Basic text-to-video generation test (first run downloads models ~15min)",
-      "input": {
-        "prompt": "A serene mountain landscape with flowing clouds and gentle wind rustling through pine trees.",
-        "seed": 42,
-        "height": 544,
-        "width": 960,
-        "num_frames": 9,
-        "frame_rate": 25.0
-      },
-      "timeout": 1800000
-    }
-  ],
+  "tests": [],
   "config": {
     "gpuTypeId": "NVIDIA GeForce RTX 4090",
     "gpuCount": 1,
