@@ -17,19 +17,30 @@ import runpod
 import torch
 
 # Model paths - check multiple locations
-VOLUME_PATH = Path("/runpod-volume/models")
-LOCAL_PATH = Path("/models")
+VOLUME_PATHS = [
+    Path("/workspace/models"),           # Network volume (common mount point)
+    Path("/runpod-volume/models"),        # Network volume (alternative mount)
+    Path("/models"),                      # Container disk fallback
+]
 
 
 def get_model_paths():
     """Get model paths, preferring volume storage if available."""
-    # Check if volume exists with models
-    if VOLUME_PATH.exists() and any(VOLUME_PATH.iterdir()):
-        base = VOLUME_PATH
-        print(f"📂 Using volume storage: {base}")
+    # Check each possible location for existing models
+    for path in VOLUME_PATHS:
+        if path.exists():
+            try:
+                if any(path.iterdir()):
+                    print(f"📂 Found models at: {path}")
+                    base = path
+                    break
+            except:
+                continue
     else:
-        base = LOCAL_PATH
-        print(f"📂 Using local storage: {base}")
+        # Default to first available path
+        base = VOLUME_PATHS[0]
+        base.mkdir(parents=True, exist_ok=True)
+        print(f"📂 Using storage: {base}")
     
     base.mkdir(parents=True, exist_ok=True)
     
