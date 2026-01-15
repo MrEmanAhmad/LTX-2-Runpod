@@ -5,50 +5,56 @@ Generates video WITH synchronized audio automatically!
 LTX-2 is the first DiT model that generates audio AND video together.
 """
 
+# IMMEDIATE startup log - before ANY imports
+import sys
+print("=" * 60, flush=True)
+print("🚀 LTX-2 Handler Starting...", flush=True)
+print(f"📦 Python: {sys.version.split()[0]}", flush=True)
+print("=" * 60, flush=True)
+
 import base64
 import io
 import os
-import sys
 import tempfile
 import traceback
 import urllib.request
 from pathlib import Path
 
-print("=" * 60)
-print("🚀 LTX-2 Video + Audio Generator Starting...")
-print("=" * 60)
-print(f"📦 Python: {sys.version.split()[0]}")
+print("✅ Basic imports done", flush=True)
 
 try:
     import runpod
-    print(f"✅ RunPod SDK loaded")
+    print("✅ RunPod SDK loaded", flush=True)
 except ImportError as e:
-    print(f"❌ Failed to import runpod: {e}")
+    print(f"❌ Failed to import runpod: {e}", flush=True)
     raise
 
 try:
     import torch
-    print(f"🔥 PyTorch: {torch.__version__}")
-    print(f"🎮 CUDA available: {torch.cuda.is_available()}")
+    print(f"🔥 PyTorch: {torch.__version__}", flush=True)
+    print(f"🎮 CUDA available: {torch.cuda.is_available()}", flush=True)
     if torch.cuda.is_available():
-        print(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+        print(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}", flush=True)
     else:
-        print("⚠️  WARNING: CUDA not available!")
+        print("⚠️  WARNING: CUDA not available!", flush=True)
 except ImportError as e:
-    print(f"❌ Failed to import torch: {e}")
+    print(f"❌ Failed to import torch: {e}", flush=True)
     raise
 
 # Test critical imports early
 try:
+    print("📦 Loading LTX packages...", flush=True)
     from ltx_pipelines import DistilledPipeline
     from ltx_core.model.video_vae import TilingConfig
-    print("✅ LTX packages loaded")
+    print("✅ LTX packages loaded", flush=True)
 except ImportError as e:
-    print(f"❌ Failed to import LTX packages: {e}")
+    print(f"❌ Failed to import LTX packages: {e}", flush=True)
     traceback.print_exc()
     raise
 
-print("=" * 60)
+print("=" * 60, flush=True)
+print("✅ All imports successful - handler ready!", flush=True)
+print("=" * 60, flush=True)
 
 # Model paths - priority order for RunPod Serverless
 def get_model_paths():
