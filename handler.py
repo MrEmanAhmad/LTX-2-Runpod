@@ -8,6 +8,7 @@ LTX-2 is the first DiT model that generates audio AND video together.
 import base64
 import io
 import os
+import sys
 import tempfile
 import traceback
 import urllib.request
@@ -16,33 +17,41 @@ from pathlib import Path
 import runpod
 import torch
 
-# Model paths - check multiple locations
-VOLUME_PATHS = [
-    Path("/workspace/models"),           # Network volume (common mount point)
-    Path("/runpod-volume/models"),        # Network volume (alternative mount)
-    Path("/models"),                      # Container disk fallback
-]
+print("=" * 60)
+print("🚀 LTX-2 Video + Audio Generator Starting...")
+print("=" * 60)
+print(f"📦 Python: {sys.version.split()[0]}")
+print(f"🔥 PyTorch: {torch.__version__}")
+print(f"🎮 CUDA available: {torch.cuda.is_available()}")
+if torch.cuda.is_available():
+    print(f"🎮 CUDA device: {torch.cuda.get_device_name(0)}")
+print("=" * 60)
 
-
+# Model paths - priority order for RunPod Serverless
 def get_model_paths():
-    """Get model paths, preferring volume storage if available."""
-    # Check each possible location for existing models
-    for path in VOLUME_PATHS:
-        if path.exists():
-            try:
-                if any(path.iterdir()):
-                    print(f"📂 Found models at: {path}")
-                    base = path
-                    break
-            except:
-                continue
+    """Get model paths, preferring network volume for persistence."""
+    import os
+    
+    # Priority 1: /runpod-volume (serverless network volume mount point)
+    if Path("/runpod-volume").exists():
+        base = Path("/runpod-volume/models")
+        print(f"📂 Using network volume: {base}")
+    # Priority 2: /workspace (GPU pod volume mount)
+    elif Path("/workspace").exists() and Path("/workspace").is_mount():
+        base = Path("/workspace/models")
+        print(f"📂 Using workspace volume: {base}")
+    # Priority 3: Container disk fallback
     else:
-        # Default to first available path
-        base = VOLUME_PATHS[0]
-        base.mkdir(parents=True, exist_ok=True)
-        print(f"📂 Using storage: {base}")
+        base = Path("/models")
+        print(f"📂 Using container disk: {base}")
     
     base.mkdir(parents=True, exist_ok=True)
+    
+    # Set HuggingFace cache to same volume for persistence
+    cache_dir = base.parent / ".cache" / "huggingface"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["HF_HOME"] = str(cache_dir)
+    print(f"📂 HF cache: {cache_dir}")
     
     return {
         "model": base / "ltx-2-19b-distilled-fp8.safetensors",
